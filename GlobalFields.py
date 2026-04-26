@@ -28,8 +28,8 @@ from qgis.PyQt.QtWidgets import QAction
 # Initialize Qt resources from file resources.py
 from .resources import *
 # Import the code for the dialog
-from .GlobalFields_dialog import GlobalFieldsDialog
 import os.path
+from qgis.PyQt.QtWidgets import QMessageBox
 
 
 class GlobalFields:
@@ -185,9 +185,18 @@ class GlobalFields:
 
         # Create the dialog with elements (after translation) and keep reference
         # Only create GUI ONCE in callback, so that it will only load when the plugin is started
-        if self.first_start == True:
-            self.first_start = False
-            self.dlg = GlobalFieldsDialog()
+        try:
+            if self.first_start == True:
+                from .GlobalFields_dialog import GlobalFieldsDialog
+                self.dlg = GlobalFieldsDialog(self.iface)
+                self.first_start = False
+        except Exception as e:
+            QMessageBox.critical(
+                self.iface.mainWindow(),
+                "Erro ao carregar GlobalFields",
+                f"Ocorreu um erro ao inicializar o plugin:\n{str(e)}"
+            )
+            return
 
         # show the dialog
         self.dlg.show()
