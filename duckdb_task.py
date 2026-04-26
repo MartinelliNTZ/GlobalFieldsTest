@@ -8,15 +8,13 @@ and queries only those files with DuckDB.
 """
 
 import os
-import math
 import duckdb
-import urllib.request
 
 from qgis.core import QgsTask, QgsVectorLayer, QgsProject
 from qgis.PyQt.QtWidgets import QMessageBox
 
 # Caminho global para os resultados na Source Cooperative
-GEOPARQUET_GLOB_PATH = "https://data.source.coop/ftw/global-data/predictions/vectors/alpha/results/*.parquet"
+GEOPARQUET_GLOB_PATH = "s3://opendata-source-coop-us-west-2/ftw/global-data/predictions/vectors/alpha/results/*.parquet"
 
 class FTWDuckDBTask(QgsTask):
     """QgsTask that queries remote FTW GeoParquet via DuckDB and loads the result into QGIS."""
@@ -59,6 +57,18 @@ class FTWDuckDBTask(QgsTask):
             con.execute("INSTALL httpfs;")
             con.execute("LOAD httpfs;")
 
+            # Configurações para acesso S3 robusto
+            con.execute("SET s3_region='us-west-2';")
+            con.execute("SET s3_endpoint='s3.us-west-2.amazonaws.com';")
+            con.execute("SET s3_url_style='vhost';")
+            con.execute("SET s3_use_ssl=true;")
+            con.execute("SET s3_access_key_id='';")
+            con.execute("SET s3_secret_access_key='';")
+            
+            # Melhorias de estabilidade de conexão
+            con.execute("SET http_keep_alive=false;")
+            con.execute("SET http_retries=5;")
+
             self.setProgress(45)
 
             read_parquet_expr = f"read_parquet('{GEOPARQUET_GLOB_PATH}')"
@@ -73,12 +83,28 @@ class FTWDuckDBTask(QgsTask):
             """
 
             # 2. Count matching rows before exporting
-            count_query = f"""
-                SELECT COUNT(*)
-                FROM {read_parquet_expr}
-                WHERE {where_clause}
-            """
-            self.row_count = con.execute(count_query).fetchone()[0]
+            try:
+                count_query = f"""
+                    SELECT COUNT(*)
+                    FROM {read_parquet_expr}
+                    WHERE {where_clause}
+                """
+                self.row_count = con.execute(count_query).fetchone()[0]
+            except Exception as e:
+                err_str = str(e).lower()
+                diag = "Falha Crítica na Conexão com o Servidor (S3/HTTP).\n\n"
+                
+                if "connection error" in err_str or "http get" in err_str:
+                    diag += "O DuckDB falhou ao listar os arquivos remotos.\n"
+                    diag += "Causas prováveis:\n"
+                    diag += "1. Sua rede ou firewall bloqueia conexões do DuckDB.\n"
+                    diag += "2. O QGIS usa um Proxy que o DuckDB não consegue acessar.\n"
+                    diag += "3. Incompatibilidade de SSL (seu QGIS/Python é muito antigo).\n"
+                    diag += "4. O bucket S3 da Source Cooperative está fora do ar."
+                else:
+                    diag += "Erro inesperado ao acessar os metadados do GeoParquet."
+                
+                raise Exception(f"{diag}\n\nDetalhe Técnico: {str(e)}")
 
             if self.row_count == 0:
                 self.exception = Exception(
